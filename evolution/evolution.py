@@ -57,8 +57,7 @@ class Evolution():
         seed_path = Path(self.seed_path)
         candidates = []
         for seed in seed_path.iterdir():
-            candidate = Candidate(seed.stem, [])
-            candidate.model.load_state_dict(torch.load(seed))
+            candidate = Candidate.from_seed(seed)
             candidates.append(candidate)
 
         # Fill the rest of the gen with random candidates
@@ -74,12 +73,15 @@ class Evolution():
 
     def record_gen_results(self, gen: int, candidates: list[Candidate]):
         """
-        Logs results of generation to CSV.
+        Logs results of generation to CSV. Saves candidates to disk
         """
         gen_results = [c.record_state() for c in candidates]
         gen_results_df = pd.DataFrame(gen_results)
         csv_path = self.save_path / f"{gen}.csv"
         gen_results_df.to_csv(csv_path, index=False)
+        for c in candidates:
+            if c.cand_id.startswith(str(gen)):
+                c.save(self.save_path / str(gen) / f"{c.cand_id}.pt")
 
     def neuroevolution(self):
         """

@@ -1,36 +1,27 @@
 from pathlib import Path
-import warnings
 
 import torch
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-from aquacrop.utils import prepare_weather, get_filepath
 
 from evolution.candidate import LSTMPrescriptor
+from evolution.evaluation.evaluator import Evaluator
 
-def load_data(weather_names: list[str]):
-        # TODO This is copy-pasted from evaluator.py
-        weather_dfs = []
-        for weather_name in weather_names:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                weather_path = get_filepath(f"{weather_name}.txt")
-                weather_df = prepare_weather(weather_path)
-            weather_dfs.append(weather_df)
+class CustomDS(Dataset):
+    def __init__(self, torch_weathers: list[torch.Tensor]):
+        self.x = torch_weathers
 
-        context_cols = ["MinTemp", "MaxTemp", "Precipitation", "ReferenceET"]
-        context_values = [torch.tensor(df[context_cols].values, dtype=torch.float32) for df in weather_dfs]
+    def __len__(self):
+        return len(self.x)
 
-        min_length = min(value.shape[0] for value in context_values)
-        truncated = [value[:min_length] for value in context_values]
-        torch_weather = torch.stack(truncated).to("mps")
-
-        return weather_dfs, torch_weather
+    def __getitem__(self, idx):
+        return self.x[idx]
 
 def train_seed(seed_path: Path, label: list[float]):
 
-    _, torch_weather = load_data(["tunis_climate", "brussels_climate", "hyderabad_climate", "champion_climate"])
-    ds = TensorDataset(torch_weather)
+    evaluator = Evaluator()
+    _, torch_weathers = evaluator.load_data(["tunis_climate", "brussels_climate", "hyderabad_climate", "champion_climate"])
+    ds = CustomDS(torch_weathers)
     dl = DataLoader(ds, batch_size=1, shuffle=True)
 
     label_tensor = torch.tensor([label], dtype=torch.float32, device="mps")
@@ -43,9 +34,9 @@ def train_seed(seed_path: Path, label: list[float]):
     with tqdm(range(epochs)) as pbar:
         for _ in pbar:
             avg_loss = 0
-            for torch_wdf in dl:
+            for torch_weather in dl:
                 optimizer.zero_grad()
-                smts, max_irr = model(torch_wdf[0])
+                smts, max_irr = model(torch_weather)
                 output = torch.cat([smts, max_irr.unsqueeze(0)], dim=1)
                 loss = criterion(output, label_tensor)
                 loss.backward()
@@ -56,7 +47,7 @@ def train_seed(seed_path: Path, label: list[float]):
     torch.save(model.state_dict(), seed_path)
 
 if __name__ == "__main__":
-    seed_dir = Path("seeding/seeds/fourpoint")
+    seed_dir = Path("seeding/seeds/fourpointtwo")
     seed_dir.mkdir(parents=True, exist_ok=True)
     train_seed(seed_dir / "0_0.pt", [0, 0, 0, 0, 0])
     train_seed(seed_dir / "0_1.pt", [100, 100, 100, 100, 450])

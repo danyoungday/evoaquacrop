@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import torch
 
 class Candidate():
@@ -7,8 +9,8 @@ class Candidate():
     def __init__(self, cand_id: str, parents: list[str]):
         self.cand_id = cand_id
         self.metrics = None
-        self.smts = None
-        self.max_irr_season = None
+        self.full_yields = None
+        self.full_irrs = None
 
         self.parents = parents
         self.rank = None
@@ -18,6 +20,18 @@ class Candidate():
         # TODO: Some sort of different initialization
         self.model = LSTMPrescriptor(4, 16, 5).to("mps")
         self.model.eval()
+
+    @classmethod
+    def from_seed(cls, path: Path):
+        cand_id = path.stem
+        parents = []
+        candidate = cls(cand_id, parents)
+        candidate.model.load_state_dict(torch.load(path))
+        return candidate
+    
+    def save(self, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self.model.state_dict(), path)
 
     def record_state(self):
         """
@@ -29,10 +43,11 @@ class Candidate():
             "rank": self.rank,
             "distance": self.distance,
             "yield": self.metrics[0],
-            "irrigation": self.metrics[1],
-            "smts": self.smts,
-            "max_irr_season": self.max_irr_season
+            "irrigation": self.metrics[1]
         }
+        for i, (dry_yield, irr) in enumerate(zip(self.full_yields, self.full_irrs)):
+            state[f"yield_{i}"] = dry_yield
+            state[f"irr_{i}"] = irr
         return state
 
     def __str__(self):
