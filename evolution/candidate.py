@@ -16,7 +16,7 @@ class Candidate():
 
         # Model
         # TODO: Some sort of different initialization
-        self.model = LSTMPrescriptor().to("mps")
+        self.model = LSTMPrescriptor(4, 16, 5).to("mps")
         self.model.eval()
 
     def record_state(self):
@@ -42,22 +42,24 @@ class Candidate():
         return f"Candidate({self.cand_id})"
 
 class LSTMPrescriptor(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, input_size, hidden_size, output_size):
         super().__init__()
-        self.lstm = torch.nn.LSTM(4, 16, batch_first=True)
-        self.linear = torch.nn.Linear(16, 5)
+        self.hidden_size = hidden_size
+        self.lstm = torch.nn.LSTM(input_size, hidden_size, batch_first=True)
+        self.linear = torch.nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
         """
         Returns shapes [4], [1]
         """
         # TODO: Should we do anything about these?
-        h0 = torch.randn((1, 16)).to("mps")
-        c0 = torch.randn((1, 16)).to("mps")
+        h0 = torch.randn((1, x.shape[0], self.hidden_size)).to("mps")
+        c0 = torch.randn((1, x.shape[0], self.hidden_size)).to("mps")
         _, (hn, _) = self.lstm(x, (h0, c0))
         outputs = self.linear(hn)
-        smts = torch.sigmoid(outputs[:, :4]) * 100
-        max_irr_season = torch.sigmoid(outputs[:, 4]) * 450 # TODO: Abs vs. relu?
+        outputs = torch.sigmoid(outputs)
+        smts = outputs[0, :, :4] * 100
+        max_irr_season = outputs[0, :, 4] * 450
 
-        return smts.squeeze(), max_irr_season
+        return smts, max_irr_season
 
