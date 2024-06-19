@@ -10,14 +10,18 @@
     "model_params": {
         "input_size": 4,
         "hidden_size": 16,
-        "output_size": 5
+        "output_size": 11
     },
     "evaluation_params": {
         "tasks": [
             "yield",
-            "irr"
+            "irr",
+            "mulch"
+        ],
+        "context_length": 90,
+        "weather_names": [
+            "tunis_climate"
         ]
     },
-    "save_path": "results/nofuture",
-    "seed_path": "seeding/seeds/fourpointtwo"
+    "save_path": "results/complexify/fieldmngt"
 }

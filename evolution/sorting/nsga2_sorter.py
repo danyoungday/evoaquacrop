@@ -73,7 +73,7 @@ class NSGA2Sorter(Sorter):
         """
         Determine if one individual dominates another.
         """
-        for obj1, obj2 in zip(candidate1.metrics, candidate2.metrics):
-            if obj1 <= obj2:
+        for obj in candidate1.metrics.keys():
+            if candidate1.metrics[obj] <= candidate2.metrics[obj]:
                 return False
         return True

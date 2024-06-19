@@ -1,5 +1,7 @@
 import argparse
 import json
+from pathlib import Path
+import shutil
 
 from evolution.evolution import Evolution
 
@@ -11,6 +13,15 @@ def main():
     with open(args.config, "r", encoding="utf-8") as f:
         config = json.load(f)
     print(config)
+
+    if Path(config["save_path"]).exists():
+        inp = input("Save path already exists, do you want to overwrite? (y/n):")
+        if inp.lower() == "y":
+            shutil.rmtree(config["save_path"])
+        else:
+            print("Exiting")
+            exit()
+
     evolution = Evolution(config)
     evolution.neuroevolution()
 

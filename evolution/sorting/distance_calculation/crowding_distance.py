@@ -13,10 +13,9 @@ class CrowdingDistanceCalculator(DistanceCalculator):
         Calculate crowding distance of each candidate in front and set it as the distance attribute.
         Candidates are assumed to already have metrics computed.
         """
-        n_objectives = len(front[0].metrics)
         for c in front:
             c.distance = 0
-        for m in range(n_objectives):
+        for m in front[0].metrics.keys():
             front.sort(key=lambda c: c.metrics[m])
             obj_min = front[0].metrics[m]
             obj_max = front[-1].metrics[m]

@@ -1,4 +1,3 @@
-import copy
 import torch
 
 from evolution.candidate import Candidate
@@ -14,8 +13,8 @@ class UniformCrossover(Crossover):
         super().__init__(full, mutator)
         self.type = "uniform"
 
-    def crossover(self, cand_id: str, parent1, parent2):
-        child = Candidate(cand_id, [parent1.cand_id, parent2.cand_id])
+    def crossover(self, cand_id: str, parent1: Candidate, parent2: Candidate) -> list[Candidate]:
+        child = Candidate(cand_id, [parent1.cand_id, parent2.cand_id], parent1.model_params, parent1.tasks)
         with torch.no_grad():
             child.model.load_state_dict(parent1.model.state_dict())
             for param, param2 in zip(child.model.parameters(), parent2.model.parameters()):

@@ -28,7 +28,9 @@ class Evolution():
         self.pop_size = self.evolution_params["pop_size"]
         self.n_generations = self.evolution_params["n_generations"]
         self.n_elites = self.evolution_params["n_elites"]
-        self.seed_path = config["seed_path"]
+        self.seed_path = None
+        if "seed_path" in config:
+            self.seed_path = config["seed_path"]
 
         self.parent_selector = TournamentSelector(config["remove_population_pct"])
         self.mutator = UniformMutation(config["mutation_factor"], config["mutation_rate"])
@@ -36,7 +38,11 @@ class Evolution():
         distance_calculator = CrowdingDistanceCalculator()
         self.sorter = NSGA2Sorter(distance_calculator)
 
-        self.evaluator = Evaluator()
+        self.model_params = config["model_params"]
+
+        evaluation_params = config["evaluation_params"]
+        self.tasks = config["evaluation_params"].pop("tasks")
+        self.evaluator = Evaluator(**evaluation_params)
 
     def make_new_pop(self, candidates: list[Candidate], n: int, gen: int) -> list[Candidate]:
         """
@@ -54,11 +60,14 @@ class Evolution():
         """
         Creates the first generation by taking seeds and creating an average of them.
         """
-        seed_path = Path(self.seed_path)
         candidates = []
-        for seed in seed_path.iterdir():
-            candidate = Candidate.from_seed(seed)
-            candidates.append(candidate)
+        if self.seed_path:
+            seed_path = Path(self.seed_path)
+            for seed in seed_path.iterdir():
+                candidate = Candidate.from_seed(seed, self.model_params, self.tasks)
+                candidates.append(candidate)
+        else:
+            candidates.extend([Candidate("0_0", [], self.model_params, self.tasks), Candidate("0_1", [], self.model_params, self.tasks)])
 
         # Fill the rest of the gen with random candidates
         while len(candidates) < self.pop_size:

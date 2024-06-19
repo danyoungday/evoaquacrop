@@ -19,13 +19,13 @@ class CustomDS(Dataset):
 
 def train_seed(seed_path: Path, label: list[float]):
 
-    evaluator = Evaluator()
-    _, torch_weathers = evaluator.load_data(["tunis_climate", "brussels_climate", "hyderabad_climate", "champion_climate"])
+    evaluator = Evaluator(context_length=90, weather_names=["tunis_climate"])
+    _, torch_weathers = evaluator.load_data(weather_names=["tunis_climate"], context_length=90)
     ds = CustomDS(torch_weathers)
     dl = DataLoader(ds, batch_size=1, shuffle=True)
 
     label_tensor = torch.tensor([label], dtype=torch.float32, device="mps")
-    model = LSTMPrescriptor(4, 16, 5)
+    model = LSTMPrescriptor(4, 16, 11)
     model.to("mps")
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
