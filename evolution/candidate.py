@@ -1,6 +1,9 @@
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import torch
+
+from evolution.constants import CROP_NAMES
 
 class Candidate():
     """
@@ -33,6 +36,49 @@ class Candidate():
     def save(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(self.model.state_dict(), path)
+
+    def prescribe(self, x: torch.tensor) -> dict:
+        """
+        Parses the output of our model so that we can use it in the AquaCrop model.
+        """
+        outputs = self.model.forward(x).detach().cpu().numpy()
+        aquacrop_params = []
+        for batch in outputs:
+            i = 0
+            irrmngt_params = {"irrigation_method": 1}
+            irrmngt_params["SMT"] = batch[i:i+4]
+            i += 4
+            irrmngt_params["max_irr_season"] = batch[i]
+            i += 1
+
+            # fieldmngt_params = {}
+            # fieldmngt_params["mulches"] = batch[i] > 0
+            # if fieldmngt_params["mulches"]:
+            #     fieldmngt_params["mulch_pct"] = batch[i]
+            # i += 1
+            
+            # fieldmngt_params["bunds"] = batch[i] > 0
+            # if fieldmngt_params["bunds"]:
+            #     fieldmngt_params["z_bund"] = batch[i] + 0.001 # zbund must be greater than 0.001
+            #     fieldmngt_params["bund_water"] = batch[i+1]
+            # i += 2
+
+            crop = {}
+            crop_probs = batch[i:i+len(CROP_NAMES)]
+            crop_idx = crop_probs.argmax()
+            crop["c_name"] = CROP_NAMES[crop_idx]
+            i += len(CROP_NAMES)
+            planting_date = datetime(2001, 1, 1) + timedelta(days=int(batch[i]))
+            planting_date = planting_date.strftime("%m/%d")
+            crop["planting_date"] = planting_date
+            i += 1
+
+            params = {}
+            params["irrigation_management"] = irrmngt_params
+            # params["field_management"] = fieldmngt_params
+            params["crop"] = crop
+            aquacrop_params.append(params)
+        return aquacrop_params
 
     def record_state(self):
         """
@@ -68,26 +114,21 @@ class LSTMPrescriptor(torch.nn.Module):
             sigmoid * 100
             % from 0-100
         [max_irr_season]:
-            sigmoid * 450
-            mm from 0-450
+            abs
+            Unlimited from 0-inf
         [mulchpct]:
-            tanh * 100
-            % from 0-100. Mulches is set to False if <= 0
-        [fmulch]:
-            sigmoid
-            factor from 0-1
+            sigmoid * 100
+            % from 0-100. Mulches is set to False if 0
         [zBund]:
-            tanh
-            m from 0-1. Bunds is set to False if <= 0
+            abs
+            m from 0-inf. Bunds is set to False if 0
         [BundWater]:
-            sigmoid * 450
-            mm from 0-450
-        [CNadjPct]:
-            tanh * 100
-            % from -100-100
-        [SRinhb]:
-            sigmoid
-            bool False if <= 0.5
+            abs
+            mm from 0-inf
+        [crop]:
+            17 crop types (which doesn't include GDD or Default) softmaxed
+        [planting_date]:
+            date from jan 1 - dec 31
         """
         # TODO: Should we do anything about these?
         h0 = torch.randn((1, x.shape[0], self.hidden_size)).to("mps")
@@ -96,46 +137,30 @@ class LSTMPrescriptor(torch.nn.Module):
         outputs = self.linear(hn)
         outputs = outputs.squeeze(1)
 
-        smts = torch.sigmoid(outputs[:, :4]) * 100
-        max_irr_season = torch.sigmoid(outputs[:, 4]).unsqueeze(1) * 450
-        mulchpct = torch.tanh(outputs[:, 5]).unsqueeze(1) * 100
-        fmulch = torch.sigmoid(outputs[:, 6]).unsqueeze(1)
-        zbund = torch.tanh(outputs[:, 7]).unsqueeze(1)
-        bundwater = torch.sigmoid(outputs[:, 8]).unsqueeze(1) * 450
-        cnadjpct = torch.tanh(outputs[:, 9]).unsqueeze(1) * 100
-        srinhb = torch.sigmoid(outputs[:, 10]).unsqueeze(1)
-        combined = torch.cat([smts, max_irr_season, mulchpct, fmulch, zbund, bundwater, cnadjpct, srinhb], dim=1)
+        processed = []
+        i = 0
+        smts = torch.sigmoid(outputs[:, i:i+4]) * 100
+        processed.append(smts)
+        i += 4
+        max_irr_season = torch.sigmoid(outputs[:, i]).unsqueeze(1) * 1000
+        processed.append(max_irr_season)
+        i += 1
+        # mulchpct = torch.sigmoid(outputs[:, i]).unsqueeze(1) * 100
+        # i += 1
+        # processed.append(mulchpct)
+        # zbund = torch.abs(outputs[:, i]).unsqueeze(1)
+        # i += 1
+        # processed.append(zbund)
+        # bundwater = torch.abs(outputs[:, i]).unsqueeze(1)
+        # i += 1
+        # processed.append(bundwater)
+        crop_logits = outputs[:, i:i+len(CROP_NAMES)]
+        i += len(CROP_NAMES)
+        crop_probs = torch.softmax(crop_logits, dim=1)
+        processed.append(crop_probs)
+        planting_date = torch.sigmoid(outputs[:, i]).unsqueeze(1) * 364
+        processed.append(planting_date)
+        i += 1
+        combined = torch.cat(processed, dim=1)
+        assert combined.shape[1] == outputs.shape[1], f"{combined.shape[1]} != {outputs.shape[1]}"
         return combined
-    
-    def prescribe(self, x):
-        """
-        Parses the output of our model so that we can use it in the AquaCrop model.
-        """
-        outputs = self.forward(x).detach().cpu().numpy()
-        irrmngts = []
-        fieldmngts = []
-        for batch in outputs:
-            irrmngt_params = {"irrigation_method": 1}
-            irrmngt_params["SMT"] = batch[:4]
-            # irrmngt_params["max_irr_season"] = batch[4]
-
-            fieldmngt_params = {}
-            fieldmngt_params["mulches"] = batch[5] > 0
-            if fieldmngt_params["mulches"]:
-                fieldmngt_params["mulch_pct"] = batch[5]
-            
-            # TODO: Re-add these later. Looks like fmulch or bunds is breaking it
-            # fieldmngt_params["f_mulch"] = batch[6]
-            # fieldmngt_params["bunds"] = batch[7] > 0
-            # if fieldmngt_params["bunds"]:
-            #     fieldmngt_params["z_bund"] = batch[7]
-            # fieldmngt_params["bund_water"] = batch[8]
-            # fieldmngt_params["curve_number_adj"] = batch[9] != 0 # TODO: This will never be false!
-            # fieldmngt_params["curve_number_adj_pct"] = batch[9]
-            # fieldmngt_params["sr_inhb"] = batch[10] > 0.5
-
-            irrmngts.append(irrmngt_params)
-            fieldmngts.append(fieldmngt_params)
-        return irrmngts, fieldmngts
-
-

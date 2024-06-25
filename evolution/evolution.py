@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pandas as pd
-import torch
 
 from evolution.candidate import Candidate
 from evolution.crossover.uniform_crossover import UniformCrossover
@@ -41,7 +40,7 @@ class Evolution():
         self.model_params = config["model_params"]
 
         evaluation_params = config["evaluation_params"]
-        self.tasks = config["evaluation_params"].pop("tasks")
+        self.tasks = config["evaluation_params"]["tasks"]
         self.evaluator = Evaluator(**evaluation_params)
 
     def make_new_pop(self, candidates: list[Candidate], n: int, gen: int) -> list[Candidate]:
@@ -62,21 +61,18 @@ class Evolution():
         """
         candidates = []
         if self.seed_path:
+            print("Seeding from ", self.seed_path)
             seed_path = Path(self.seed_path)
             for seed in seed_path.iterdir():
                 candidate = Candidate.from_seed(seed, self.model_params, self.tasks)
                 candidates.append(candidate)
         else:
+            print("Generating random seed generation")
             candidates.extend([Candidate("0_0", [], self.model_params, self.tasks), Candidate("0_1", [], self.model_params, self.tasks)])
-
-        # Fill the rest of the gen with random candidates
-        while len(candidates) < self.pop_size:
-            candidates.extend(self.crossover.crossover(f"0_{len(candidates)}",
-                                                     candidates[0],
-                                                     candidates[1]))
 
         self.evaluator.evaluate_candidates(candidates)
         candidates = self.sorter.sort_candidates(candidates)
+
         self.record_gen_results(0, candidates)
         return candidates
 

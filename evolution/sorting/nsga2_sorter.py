@@ -15,65 +15,54 @@ class NSGA2Sorter(Sorter):
         candidates.sort(key=lambda x: (x.rank, -x.distance))
         return candidates
 
+    # pylint: disable=consider-using-enumerate
     def fast_non_dominated_sort(self, candidates: list[Candidate]):
-        """
-        Fast non-dominated sort algorithm from ChatGPT
-        """
-        for c in candidates:
-            c.rank = 0
-
-        population_size = len(candidates)
-        S = [[] for _ in range(population_size)]
-        front = [[]]
-        n = [0 for _ in range(population_size)]
-        rank = [0 for _ in range(population_size)]
-
-        for p in range(population_size):
+        S = [[] for _ in range(len(candidates))]
+        n = [0 for _ in range(len(candidates))]
+        fronts = [[]]
+        for p in range(len(candidates)):
             S[p] = []
             n[p] = 0
-            for q in range(population_size):
+            for q in range(len(candidates)):
                 if self.dominates(candidates[p], candidates[q]):
-                    if q not in S[p]:
-                        S[p].append(q)
+                    S[p].append(q)
                 elif self.dominates(candidates[q], candidates[p]):
-                    n[p] = n[p] + 1
+                    n[p] += 1
             if n[p] == 0:
-                rank[p] = 0
-                if p not in front[0]:
-                    front[0].append(p)
+                candidates[p].rank = 1
+                fronts[0].append(p)
 
-        i = 0
-        while front[i] != []:
+            # print(f"S[{p}]: {S[p]}")
+            # print(f"n[{p}]: {n[p]}")
+
+        i = 1
+        while len(fronts[i-1]) > 0:
             Q = []
-            for p in front[i]:
+            for p in fronts[i-1]:
                 for q in S[p]:
-                    n[q] = n[q] - 1
+                    n[q] -= 1
                     if n[q] == 0:
-                        rank[q] = i+1
-                        if q not in Q:
-                            Q.append(q)
-            i = i+1
-            front.append(Q)
+                        candidates[q].rank = i + 1
+                        Q.append(q)
+            i += 1
+            fronts.append(Q)
 
-        # With this implementation the final front will be empty
-        del front[len(front)-1]
+        cand_fronts = []
+        for front in fronts:
+            if len(front) > 0:
+                cand_fronts.append([candidates[i] for i in front])
+        return cand_fronts
 
-        # Convert front indices to candidates
-        candidate_fronts = []
-        for f in front:
-            cands = []
-            for idx in f:
-                candidates[idx].rank = rank[idx] + 1 # Manually increment to match NSGA-II convention
-                cands.append(candidates[idx])
-            candidate_fronts.append(cands)
-
-        return candidate_fronts
+    # pylint: enable=consider-using-enumerate
 
     def dominates(self, candidate1: Candidate, candidate2: Candidate) -> bool:
         """
         Determine if one individual dominates another.
         """
+        better = False
         for obj in candidate1.metrics.keys():
-            if candidate1.metrics[obj] <= candidate2.metrics[obj]:
+            if candidate1.metrics[obj] < candidate2.metrics[obj]:
                 return False
-        return True
+            if candidate1.metrics[obj] > candidate2.metrics[obj]:
+                better = True
+        return better
