@@ -20,11 +20,18 @@
         "soil_type": "ClayLoam",
         "init_wc_params": {
             "wc_type": "Pct",
-            "value": [70]
+            "value": [
+                70
+            ]
         },
         "context_length": 90,
-        "weather_names": ["tunis_climate"]
+        "weather_names": [
+            "tunis_climate",
+            "brussels_climate",
+            "hyderabad_climate",
+            "champion_climate"
+        ]
     },
-    "save_path": "results/simplify/kcal",
-    "seed_path": "seeding/seeds/kcal"
+    "save_path": "results/context/all",
+    "seed_path": "seeding/seeds/allcontext"
 }

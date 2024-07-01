@@ -1,4 +1,5 @@
 from pathlib import Path
+import random
 import warnings
 
 from aquacrop import AquaCropModel, Soil, InitialWaterContent, Crop, IrrigationManagement, FieldMngt
@@ -15,72 +16,93 @@ class Evaluator:
         Valid weather names: ["tunis_climate", "brussels_climate", "hyderabad_climate", "champion_climate"]
         """
         self.tasks = tasks
-
-        self.soil = Soil(soil_type) # define soil
-        self.init_wc = InitialWaterContent(**init_wc_params) # define initial soil water conditions
+        
+        # self.soil = Soil(soil_type) # define soil
+        # self.init_wc = InitialWaterContent(**init_wc_params) # define initial soil water conditions
 
         self.weather_names = weather_names
+        self.context_cols = ["MinTemp", "MaxTemp", "Precipitation", "ReferenceET"]
+        self.normalized_cols = [f"{col}_norm" for col in self.context_cols]
         self.weather_dfs, self.torch_weathers = self.load_data(self.weather_names, context_length)
+
+        # Artificially create soils
+        random.seed(42)
+        soil_types = [
+            'Clay', 'ClayLoam', 'Loam', 'LoamySand', 'Sand', 'SandyClay', 
+            'SandyClayLoam', 'SandyLoam', 'Silt', 'SiltClayLoam', 
+            'SiltLoam', 'SiltClay', 'Paddy'
+        ]
+        soils = random.choices(soil_types, k=len(self.weather_dfs))
+        self.soils = [Soil(soil) for soil in soils]
+        wcs = [random.random() * 10 for _ in range(len(self.weather_dfs))]
+        self.init_wcs = [InitialWaterContent(wc_type="Pct", value=[wc]) for wc in wcs]
 
         nutrition_df = pd.read_csv(Path("data/cals.csv"))
         self.crop_cals = {row["name"]: row["kcal"] for _, row in nutrition_df.iterrows()}
 
     def load_data(self, weather_names: list[str], context_length: int):
         """
-        Iterates over all weather files and creates a list of dataframes and torch tensors.
-        The dataframes are used for the AquaCrop model and consist of each year of weather data.
-        The torch tensors are used for the LSTM model to prescribe actions and consist of the preceding context_length days.
+        Loads weather data.
+        Scales the context columns across all countries.
+        Then goes through each country and gets sliding windows of 3 years of weather data for the simulator
+        + the preceding context_length days of weather data for the LSTM.
         """
-        weather_dfs = []
-        torch_weathers = []
-        context_cols = ["MinTemp", "MaxTemp", "Precipitation", "ReferenceET"]
-        normalized_cols = [f"{col}_norm" for col in context_cols]
+        country_dfs = []
+        # Load each country's weather df
         for weather_name in weather_names:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 weather_path = get_filepath(f"{weather_name}.txt")
-                weather_df = prepare_weather(weather_path)
+                country_df = prepare_weather(weather_path)
+                country_dfs.append(country_df)
+        
+        # Get scaled context column across all countries
+        combined_df = pd.concat(country_dfs)
+        assert len(combined_df) == sum([len(df) for df in country_dfs])
+        for country_df in country_dfs:
+            for col in self.context_cols:
+                country_df[f"{col}_norm"] = (country_df[col] - combined_df[col].mean()) / combined_df[col].std()
 
-            # Get normalized context_cols for torch tensors
-            for col in context_cols:
-                weather_df[f"{col}_norm"] = (weather_df[col] - weather_df[col].mean()) / weather_df[col].std()
-
-            # Sort dataframe by date
-            weather_df.sort_values(by="Date", inplace=True, ascending=True)
-
+        # Assemble inputs
+        weather_dfs = []
+        torch_weathers = []
+        for country_df in country_dfs:
+            s = len(weather_dfs)
+            country_df = country_df.sort_values("Date")
             # Shave off the last year because it may be incomplete
-            weather_df["year"] = weather_df["Date"].dt.year
-            weather_df = weather_df[weather_df["year"] < weather_df["year"].max()]
+            country_df["year"] = country_df["Date"].dt.year
+            country_df = country_df[country_df["year"] < country_df["year"].max()]
 
             # Iterate over the unique years in the dataframe
-            for year in weather_df["year"].unique():
+            for year in country_df["year"].unique():
                 # We don't want the last 2 years because we need to collect 3 years' worth for the simulation
-                if year == weather_df["year"].max() or year == weather_df["year"].max()-1:
+                if year == country_df["year"].max() or year == country_df["year"].max()-1:
+                    continue
+                
+                # Determine the start date of the preceding 90 days period
+                torch_start_date = pd.Timestamp(f'{year}-1-01') - pd.Timedelta(days=context_length)  # 90 days before January 1st of the current year
+                # We don't want to include the first year if it doesn't have enough preceding days
+                if country_df["Date"][0] > torch_start_date:
                     continue
 
                 # Filter the dataframe for the current year and the year after
-                year_data = weather_df[weather_df["year"].isin([year, year + 1, year+2])]
-                
-                # Determine the start date of the preceding 90 days period
-                start_date = pd.Timestamp(f'{year}-1-01') - pd.Timedelta(days=context_length)  # 90 days before January 1st of the current year
-                
-                # Check if there are sufficient preceding days in the dataframe
-                if weather_df["Date"][0] > start_date:
-                    continue
+                year_data = country_df[country_df["year"].isin([year, year+1, year+2])]
 
-                # Filter the dataframe for the preceding 90 days
-                preceding_data = weather_df[(weather_df["Date"] >= start_date) & (weather_df["Date"] < pd.Timestamp(f'{year}-01-01'))]
-                
                 # Append the data to the respective lists
                 to_add = year_data.copy()
-                to_add.drop(columns=normalized_cols + ["year"], inplace=True)
+                to_add.drop(columns=["year"] + self.normalized_cols, inplace=True)
                 weather_dfs.append(to_add)
-                torch_weathers.append(torch.tensor(preceding_data[normalized_cols].values, dtype=torch.float32, device="mps"))
 
-        print(f"Loaded {len(weather_dfs)} year pairs of weather data")
+                # Construct torch tensor for LSTM from preceding 90 days
+                preceding_data = country_df[(country_df["Date"] >= torch_start_date) & (country_df["Date"] < pd.Timestamp(f'{year}-01-01'))]
+                assert len(preceding_data) == context_length, f"Expected {context_length} days for year {year}, got {len(preceding_data)}"
+                torch_weathers.append(torch.tensor(preceding_data[self.normalized_cols].values, dtype=torch.float32, device="mps"))
+
+            print(f"Loaded {len(weather_dfs) - s} year pairs of weather data")
+        
         return weather_dfs, torch_weathers
 
-    def run_model(self, weather_df, aquacrop_params: dict):
+    def run_model(self, weather_df, soil, init_wc, aquacrop_params: dict):
         """
         function to run model and return results for given set of soil moisture targets.
         """
@@ -101,8 +123,8 @@ class Evaluator:
             model = AquaCropModel(start_date,
                                 f'{year2}/12/31',
                                 weather_df,
-                                self.soil,
-                                initial_water_content=self.init_wc,
+                                soil=soil,
+                                initial_water_content=init_wc,
                                 **model_params)
             model.run_model(till_termination=True)
             results = model.get_simulation_results()
@@ -111,13 +133,13 @@ class Evaluator:
     def evaluate_candidate(self, candidate: Candidate):
         yields = []
         irrs = []
-        for weather_df, torch_weather in zip(self.weather_dfs, self.torch_weathers):
+        for weather_df, soil, init_wc, torch_weather in zip(self.weather_dfs, self.soils, self.init_wcs, self.torch_weathers):
             # Run LSTM
             torch_weather = torch_weather.unsqueeze(0)
             aquacrop_params = candidate.prescribe(torch_weather)
             aquacrop_params = aquacrop_params[0]
             # Pass actions into model
-            results = self.run_model(weather_df, aquacrop_params)
+            results = self.run_model(weather_df, soil, init_wc, aquacrop_params)
             dry_yield = results['Dry yield (tonne/ha)'].iloc[0]
             if "kcal" in self.tasks:
                 crop_name = aquacrop_params["crop"]["c_name"]

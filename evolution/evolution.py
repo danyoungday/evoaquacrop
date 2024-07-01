@@ -68,7 +68,9 @@ class Evolution():
                 candidates.append(candidate)
         else:
             print("Generating random seed generation")
-            candidates.extend([Candidate("0_0", [], self.model_params, self.tasks), Candidate("0_1", [], self.model_params, self.tasks)])
+            for i in range(self.pop_size):
+                candidate = Candidate(f"0_{i}", [], self.model_params, self.tasks)
+                candidates.append(candidate)
 
         self.evaluator.evaluate_candidates(candidates)
         candidates = self.sorter.sort_candidates(candidates)

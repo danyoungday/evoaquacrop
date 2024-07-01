@@ -1,12 +1,15 @@
+import argparse
 from datetime import datetime
 import itertools
 import json
 from pathlib import Path
+import shutil
 
 import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
+from evolution.constants import CROP_NAMES
 from evolution.candidate import LSTMPrescriptor
 from evolution.evaluation.evaluator import Evaluator
 
@@ -20,19 +23,18 @@ class CustomDS(Dataset):
     def __getitem__(self, idx):
         return self.x[idx]
 
-def train_seed(model_params: dict, seed_path: Path, torch_weathers: list[torch.tensor], label: torch.tensor):
+def train_seed(epochs: int, model_params: dict, seed_path: Path, torch_weathers: list[torch.tensor], label: torch.tensor):
     ds = CustomDS(torch_weathers)
     dl = DataLoader(ds, batch_size=1, shuffle=True)
 
     label_tensor = label.to("mps")
-    print(label_tensor)
     model = LSTMPrescriptor(**model_params)
     model.to("mps")
     model.train()
     optimizer = torch.optim.AdamW(model.parameters())
     criterion = torch.nn.MSELoss()
-    epochs = 250
-    with tqdm(range(epochs)) as pbar:
+    avg_loss = 0
+    with tqdm(range(epochs), leave=False) as pbar:
         for _ in pbar:
             avg_loss = 0
             for torch_weather in dl:
@@ -42,8 +44,11 @@ def train_seed(model_params: dict, seed_path: Path, torch_weathers: list[torch.t
                 loss.backward()
                 optimizer.step()
                 avg_loss += loss.item()
-            pbar.set_description(f"Avg Loss: {(avg_loss / len(ds)):.5f}")
+            avg_loss /= len(ds)
+            pbar.set_postfix({"Loss": avg_loss})
+
     torch.save(model.state_dict(), seed_path)
+    return avg_loss
 
 def create_labels():
     """
@@ -66,8 +71,8 @@ def create_labels():
     # categories.append(bunds)
 
     crops = []
-    for i in range(17):
-        crops.append(torch.tensor([0 if i != j else 1 for j in range(17)], dtype=torch.float32))
+    for i in range(len(CROP_NAMES)):
+        crops.append(torch.tensor([0 if i != j else 1 for j in range(len(CROP_NAMES))], dtype=torch.float32))
     categories.append(crops)
 
     jan1 = datetime(2001, 1, 1)
@@ -86,7 +91,24 @@ def create_labels():
     return labels
 
 def main():
-    config = json.load(open("configs/simplify.json", "r", encoding="utf-8"))
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, help="Path to config file.")
+    parser.add_argument("--epochs", type=int, default=250, help="Number of epochs to train for.")
+    args = parser.parse_args()
+
+    with open(args.config, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    print(config)
+
+    if Path(config["seed_path"]).exists():
+        inp = input("Seed path already exists, do you want to overwrite? (y/n):")
+        if inp.lower() == "y":
+            shutil.rmtree(config["seed_path"])
+        else:
+            print("Exiting")
+            exit()
+
     evaluator_params = config["evaluation_params"]
     evaluator = Evaluator(**evaluator_params)
     torch_weathers = evaluator.torch_weathers
@@ -95,10 +117,12 @@ def main():
     seed_dir.mkdir(parents=True, exist_ok=True)
 
     labels = create_labels()
-    torch.random.manual_seed(42)
-    for i, label in enumerate(labels):
-        print(f"Training seed 0_{i}.pt")
-        train_seed(model_params, seed_dir / f"0_{i}.pt", torch_weathers, label)
+    torch.manual_seed(42)
+    with tqdm(enumerate(labels), total=len(labels)) as pbar:
+        for i, label in pbar:
+            pbar.set_description(f"Training seed 0_{i}")
+            final_loss = train_seed(args.epochs, model_params, seed_dir / f"0_{i}.pt", torch_weathers, label)
+            pbar.set_postfix({"Loss": final_loss})
 
 if __name__ == "__main__":
     main()
